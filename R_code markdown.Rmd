@@ -164,6 +164,24 @@ get_LC_values <- function(df_subset) {
 ```{r}
 get_LC_values(data_24)
 ```
+Convert to mg/L, considering stock solution is 1g/mL
+```{r}
+# Example LC values (decimal)
+LC_values <- c(0.0005700431, 0.08479177)  # LC10 and LC50 in decimal
+
+# Conversion to mg/L
+mg_per_L <- LC_values * 10000
+
+# Create a data frame with both decimal and mg/L values
+df_LC <- data.frame(
+  LC_decimal = LC_values,
+  LC_mg_per_L = mg_per_L
+)
+
+# Print results
+print(df_LC)
+
+```
 
 ```{r}
 get_LC_values(data_48)
