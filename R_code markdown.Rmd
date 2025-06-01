@@ -1,0 +1,228 @@
+---
+title: "R Code"
+author: "Grace, Irazu"
+date: "2025-05-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Sunscreen Toxicity Assay Data Analysis
+* by Mary Grace Catapang, Irazu Cansado
+
+```{r libraries}
+library(dplyr)
+library(dunn.test)
+library(ggplot2)
+```
+
+
+```{r libraries}
+library(ecotox)
+```
+
+## 1. Data cleaning and preparation
+
+```{r load data}
+data <- read.csv("sunscreen_data2.csv")
+data
+```
+
+## 2. Analyzing Control Data
+
+No significant difference between the Control and DMSO groups: \* 24hr - all recorded 0 deaths for both Control and DMSO \* 48hr - nonparametric Wilcox test show non-significant results (p = 0.8137)
+
+```{r}
+control48data <- data %>% filter(ControlType == "Control") %>% filter(Time_hr == 48)
+control48data
+dmso48data <- data %>% filter(ControlType == "DMSO") %>% filter(Time_hr == 48)
+dmso48data
+```
+
+```{r}
+wilcox.test(control48data$MortalityRate, dmso48data$MortalityRate, alternative="two.sided") 
+```
+
+Because there is no significant difference, we can use both Control and DMSO as pooled control.
+
+```{r}
+# Create a pooled control variable
+data$PooledControl <- ifelse(data$ControlType %in% c("Control", "DMSO"), "PooledControl", "Treatment")
+data$PooledControl <- as.factor(data$PooledControl)
+data
+```
+
+## 3. Abbot's corrected mortality
+
+The 24hr data remains the same because of 0% mortality across control samples. Thus, the 24hr data can be more reliable in for measuring LC50.
+
+```{r}
+# Function for Abbott's correction
+abbott_correction <- function(df) {
+  control_mortality <- mean(df$MortalityRate[df$Concentration_percent == 0])
+  df$MortalityRate_corrected <- with(df,
+    ifelse(Concentration_percent == 0, MortalityRate,
+           (MortalityRate - control_mortality) / (1 - control_mortality)))
+  return(df)
+}
+
+# Split by time and apply correction separately
+data_24 <- subset(data, Time_hr == 24)
+data_24 <- abbott_correction(data_24)
+
+data_48 <- subset(data, Time_hr == 48)
+data_48 <- abbott_correction(data_48)
+```
+
+
+## 4. Calculations of NOEC and LOEC using Kruskal-Wallis + Dunn's test
+
+No significant difference in the mortality rates of different concentrations
+
+```{r}
+# Check normality
+shapiro.test(data$MortalityRate[data$PooledControl== "PooledControl"])
+shapiro.test(data$MortalityRate[data$PooledControl== "Treatment"])
+```
+
+Not normally distributed.
+
+```{r}
+library(car)
+leveneTest(MortalityRate ~ PooledControl, data = data)
+```
+ p < 0.05, variances are unequal
+
+```{r}
+# NOEC / LOEC at 48hr
+
+# Kruskal Wallis test across concentrations (including pooled controls)
+kw48 <- kruskal.test(MortalityRate ~ Concentration_percent, data = data_48)
+kw48
+```
+
+```{r}
+# Post-hoc test 
+dunn48 <- dunn.test(data_48$MortalityRate, data_48$Concentration_percent, method = "bh")
+```
+
+```{r}
+# NOEC / LOEC at 24hr
+
+# Kruskal Wallis test across concentrations (including pooled controls)
+kw24 <- kruskal.test(MortalityRate ~ Concentration_percent, data = data_24)
+kw24
+```
+
+```{r}
+# Post-hoc test 
+dunn24 <- dunn.test(data_24$MortalityRate, as.factor(data_24$Concentration_percent), method = "bh")
+```
+
+## 5. LC50 values
+
+```{r function}
+get_LC_values <- function(df_subset) {
+  # Remove zero or negative concentrations to avoid log10(0) or log10(negative)
+  df_subset <- df_subset %>% filter(Concentration_percent > 0)
+  
+  # Check for missing/infinite values
+  df_subset <- df_subset %>% filter(is.finite(Concentration_percent),
+                                    is.finite(Dead),
+                                    is.finite(NumberExposed))
+  
+  # Check that there’s variation in mortality
+  if (length(unique(df_subset$Dead / df_subset$NumberExposed)) == 1) {
+    stop("No variation in mortality - cannot fit GLM")
+  }
+  
+  # Fit the probit GLM
+  model <- glm(cbind(Dead, NumberExposed - Dead) ~ log10(Concentration_percent),
+                data = df_subset, family = binomial(link = "probit"))
+  
+  # Helper function to calculate LCx
+  get_LC <- function(model, x) {
+    z <- qnorm(x / 100)
+    coef <- coef(model)
+    logLC <- (z - coef[1]) / coef[2]
+    10^logLC
+  }
+  
+  # Calculate LC10 and LC50
+  lc10 <- get_LC(model, 10)
+  lc50 <- get_LC(model, 50)
+  
+  # Return the values and model
+  return(list(LC10 = lc10, LC50 = lc50, model = model))
+}
+
+```
+
+
+```{r}
+get_LC_values(data_24)
+```
+
+```{r}
+get_LC_values(data_48)
+```
+
+## 6. Probit dose-response curve
+
+
+```{r}
+if (!any(grepl("h", data$Time_hr))) {
+  data$Time_hr <- factor(data$Time_hr,
+                                    levels = c(24, 48),
+                                    labels = c("24h", "48h"))
+}
+data <- data %>% filter(PooledControl=="Treatment")
+data <- data %>% filter(Concentration_percent > 0)
+data$Alive <- data$NumberExposed - data$Dead
+data$logConc <- log10(data$Concentration_percent)
+data$MortalityRate <- data$Dead / data$NumberExposed
+
+data_24h <- subset(data, Time_hr == "24h")
+data_48h <- subset(data, Time_hr == "48h")
+
+# Ajustar modelos Probit
+model_probit_24h <- glm(cbind(Dead, Alive) ~ logConc, data = data_24h, family = binomial(link = "probit"))
+model_probit_48h <- glm(cbind(Dead, Alive) ~ logConc, data = data_48h, family = binomial(link = "probit"))
+
+# Generar secuencia de concentraciones logarítmicas para predicción
+log_conc_seq <- seq(min(data$logConc), max(data$logConc), length.out = 100)
+
+# Crear dataframes de predicción
+pred_24h <- data.frame(logConc = log_conc_seq, Time_hr = "24h")
+pred_24h$Mortality <- predict(model_probit_24h, newdata = pred_24h, type = "response")
+
+pred_48h <- data.frame(logConc = log_conc_seq, Time_hr = "48h")
+pred_48h$Mortality <- predict(model_probit_48h, newdata = pred_48h, type = "response")
+
+# Unir predicciones
+pred_all <- rbind(pred_24h, pred_48h)
+
+# Crear el gráfico
+ggplot() +
+  geom_point(data = data,
+             aes(x = logConc, y = MortalityRate, color = Time_hr),
+             size = 3, alpha = 0.7) +
+  geom_line(data = pred_all,
+            aes(x = logConc, y = Mortality, color = Time_hr),
+            size = 1.2) +
+  scale_color_manual(values = c("24h" = "#1f77b4", "48h" = "#ff7f0e"),
+                     labels = c("24h", "48h")) +
+  theme_minimal(base_size = 12) +
+  labs(title = "Probit Dose-Response Curve",
+       x = "Log10(Concentration Percent)",
+       y = "Mortality proportion",
+       color = "Exposition time") +
+  theme(legend.position = "top",
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+        axis.title = element_text(size = 12),
+        legend.title = element_text(size = 12))
+```
+
+
