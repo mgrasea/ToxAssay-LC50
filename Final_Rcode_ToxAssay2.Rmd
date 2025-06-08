@@ -23,7 +23,7 @@ library(ecotox)
 ## 1. Data cleaning and preparation
 
 ```{r load data}
-data <- read.csv("sunscreen_data2.csv")
+data <- read.csv("sunscreen_data3.csv")
 data
 ```
 
@@ -51,29 +51,9 @@ data$PooledControl <- as.factor(data$PooledControl)
 data
 ```
 
-## 3. Abbot's corrected mortality
 
-The 24hr data remains the same because of 0% mortality across control samples. Thus, the 24hr data can be more reliable.
 
-```{r}
-# Function for Abbott's correction
-abbott_correction <- function(df) {
-  control_mortality <- mean(df$MortalityRate[df$Concentration_percent == 0])
-  df$MortalityRate_corrected <- with(df,
-    ifelse(Concentration_percent == 0, MortalityRate,
-           (MortalityRate - control_mortality) / (1 - control_mortality)))
-  return(df)
-}
-
-# Split by time and apply correction separately
-data_24 <- subset(data, Time_hr == 24)
-data_24 <- abbott_correction(data_24)
-
-data_48 <- subset(data, Time_hr == 48)
-data_48 <- abbott_correction(data_48)
-```
-
-## 4. Calculations of NOEC and LOEC using Kruskal-Wallis + Dunn's test
+## 3. Calculations of NOEC and LOEC using Kruskal-Wallis + Dunn's test
 
 No significant difference in the mortality rates of different concentrations
 
@@ -100,7 +80,6 @@ Kruskal Wallis test across concentrations (including pooled controls)
 kw48 <- kruskal.test(MortalityRate ~ Concentration_sunscreen, data = data_48)
 kw48
 ```
-
 ```{r}
 # Post-hoc test 
 dunn48 <- dunn.test(data_48$MortalityRate, data_48$Concentration_sunscreen, method = "bh")
@@ -126,19 +105,23 @@ dunn24 <- dunn.test(data_24$MortalityRate, as.factor(data_24$Concentration_sunsc
 ### COMPARATION 24H and 48H per group of concentraction:
 
 ```{r}
-library(dplyr)
 
-datos_sunscreen <- data %>% filter(ControlType == "Sunscreen")
-
-resultados_ttest <- datos_sunscreen %>%
-  group_by(Concentration_percent) %>%
+resultados_wilcox <- datos_sunscreen %>%
+  group_by(Concentration_sunscreen) %>%
   summarise(
-    p_value = t.test(MortalityRate[Time_hr == 24],
-                     MortalityRate[Time_hr == 48],
-                     paired = TRUE)$p.value
+    p_value = tryCatch(
+      wilcox.test(
+        MortalityRate[Time_hr == 24],
+        MortalityRate[Time_hr == 48],
+        paired = TRUE,
+        exact = FALSE
+      )$p.value,
+      error = function(e) NA_real_
+    ),
+    .groups = "drop"
   )
 
-print(resultados_ttest)
+print(resultados_wilcox)
 
 
 ```
@@ -195,17 +178,17 @@ ggplot(summary_data, aes(x = factor(Concentration_percent),
 
 ```
 
-## 5. LC50 values
+## 4. LC50 values
 
 calcula intervalo confianza
 
 ```{r function}
 get_LC_values <- function(df_subset) {
   # Remove zero or negative concentrations to avoid log10(0) or log10(negative)
-  df_subset <- df_subset %>% filter(Concentration_percent > 0)
+  df_subset <- df_subset %>% filter(Concentration_sunscreen > 0)
   
   # Check for missing/infinite values
-  df_subset <- df_subset %>% filter(is.finite(Concentration_percent),
+  df_subset <- df_subset %>% filter(is.finite(Concentration_sunscreen),
                                     is.finite(Dead),
                                     is.finite(NumberExposed))
   
@@ -215,7 +198,7 @@ get_LC_values <- function(df_subset) {
   }
   
   # Fit the probit GLM
-  model <- glm(cbind(Dead, NumberExposed - Dead) ~ log10(Concentration_percent),
+  model <- glm(cbind(Dead, NumberExposed - Dead) ~ log10(Concentration_sunscreen),
                 data = df_subset, family = binomial(link = "probit"))
   
   # Helper function to calculate LCx
@@ -238,6 +221,7 @@ get_LC_values <- function(df_subset) {
 
 ### LC50 at 24h
 
+
 ```{r}
 get_LC_values(data_24)
 ```
@@ -246,7 +230,7 @@ Convert to mg/L, considering stock solution is 1g/mL
 
 ```{r}
 # Example LC values (decimal)
-LC_values <- c(0.0005700431, 0.08479177)  # LC10 and LC50 in decimal
+LC_values <- c(0.002876023, 0.01877322)  # LC10 and LC50 in decimal
 
 # Conversion to mg/L
 mg_per_L <- LC_values * 10000
@@ -269,7 +253,7 @@ get_LC_values(data_48)
 
 ```{r}
 # Example LC values (decimal)
-LC_values_48 <- c(2.744686e-05 , 0.01427149)  # LC10 and LC50 in decimal
+LC_values_48 <- c(0.001207872 , 0.008641191)  # LC10 and LC50 in decimal
 
 # Conversion to mg/L
 mg_per_L <- LC_values_48 * 10000
@@ -284,7 +268,7 @@ df_LC <- data.frame(
 print(df_LC)
 ```
 
-## 6. Probit dose-response curve
+## 5. Probit dose-response curve
 
 ```{r}
 if (!any(grepl("h", data$Time_hr))) {
@@ -293,7 +277,7 @@ if (!any(grepl("h", data$Time_hr))) {
                                     labels = c("24h", "48h"))
 }
 data <- data %>% filter(PooledControl=="Treatment")
-data <- data %>% filter(Concentration_percent > 0)
+data <- data %>% filter(Concentration_sunscreen> 0)
 data$Alive <- data$NumberExposed - data$Dead
 data$logConc <- log10(data$Concentration_percent)
 data$MortalityRate <- data$Dead / data$NumberExposed
@@ -382,101 +366,3 @@ ggplot() +
 
 ```
 
-```{r}
-library(knitr)
-library(kableExtra)
-
-summary_table <- data.frame(
-  "Exposure time" = c("24 hours", "48 hours"),
-  "LC10 (mg/L)" = c(5.7, 0.27),
-  "LC50 (mg/L)" = c(848, 143),
-  "Kruskal-Wallis p-value" = c(0.2834, 0.1794)
-)
-
-kable(
-  summary_table, 
-  col.names = c("Exposure time", "LC₁₀ (mg/L)", "LC₅₀ (mg/L)", "Kruskal-Wallis p-value"),
-  caption = "<b>LC₁₀, LC₅₀ and Kruskal-Wallis p-values at 24 h and 48 h</b>"
-) %>%
-  kable_styling(full_width = FALSE, position = "center", font_size = 14)
-
-```
-
-```{r}
-library(knitr)
-library(kableExtra)
-
-# Crea el dataframe
-mortality_table <- data.frame(
-  Concentration = c("Control", "DMSO", 
-                    "Sunscreen 0.0033% (1/30)", 
-                    "Sunscreen 0.0100% (1/10)", 
-                    "Sunscreen 0.0333% (1/3)", 
-                    "Sunscreen 0.1000% (1)"),
-  `24 h Mortality (%)` = c(0, 0, 26.7, 13.3, 53.3, 100),
-  `48 h Mortality (%)` = c(13.3, 20, 33.3, 33.3, 73.3, 100)
-)
-
-# Exporta la tabla en formato tipo paper
-kable(mortality_table, 
-      col.names = c("Concentration", "24 h Mortality (%)", "48 h Mortality (%)"),
-      caption = "Mortality (%) by group and exposure time.") %>%
-  kable_styling(full_width = FALSE, position = "center", font_size = 14)
-
-```
-
-```{r}
-library(knitr)
-library(kableExtra)
-
-# Crear data frame con los resultados
-results_table <- data.frame(
-  "Exposure time" = c("24 h", "", "", "48 h", "", ""),
-  "Kruskal-Wallis test (χ², p)" = c(
-    "χ² = 7.24, p = 0.0647", "", "",
-    "χ² = 8.16, p = 0.0428", "", ""
-  ),
-  "Global significance" = c(
-    "Not significant", "", "",
-    "Significant", "", ""
-  ),
-  "Dunn comparisons" = c(
-    "0.1 vs 0.0033",
-    "0.1 vs 0.01",
-    "0.1 vs 0.0333",
-    "0.1 vs 0.0033",
-    "0.1 vs 0.01",
-    "0.1 vs 0.0333"
-  ),
-  "Adjusted p-value" = c(
-    "0.0593",
-    "0.0405",
-    "0.1978",
-    "**0.0297**",
-    "0.0507",
-    "0.2293"
-  ),
-  "Interpretation" = c(
-    "LOEC not determined",
-    "(Global test not significant)",
-    "",
-    "**LOEC: 0.1 %**",
-    "",
-    "**NOEC: 0.0333 %**"
-  ),
-  check.names = FALSE
-)
-
-# Mostrar tabla con formato similar
-kable(results_table,
-      col.names = c("Exposure time", 
-                    "Kruskal-Wallis test (χ², p)", 
-                    "Global significance", 
-                    "Dunn comparisons", 
-                    "Adjusted p-value", 
-                    "Interpretation"),
-      caption = "NOEC and LOEC determination based on Kruskal-Wallis and Dunn's test (without pooled controls).") %>%
-  kable_styling(full_width = FALSE, position = "center", font_size = 14)
-
-
-```
