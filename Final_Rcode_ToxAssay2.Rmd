@@ -26,6 +26,15 @@ library(ecotox)
 data <- read.csv("sunscreen_data3.csv")
 data
 ```
+```{r}
+# Split by time and apply correction separately
+data_24 <- subset(data, Time_hr == 24)
+data_24 <- abbott_correction(data_24)
+
+data_48 <- subset(data, Time_hr == 48)
+data_48 <- abbott_correction(data_48)
+```
+
 
 ## 2. Analyzing Control Data
 
@@ -106,7 +115,7 @@ dunn24 <- dunn.test(data_24$MortalityRate, as.factor(data_24$Concentration_sunsc
 
 ```{r}
 
-resultados_wilcox <- datos_sunscreen %>%
+resultados_wilcox <- data %>%
   group_by(Concentration_sunscreen) %>%
   summarise(
     p_value = tryCatch(
@@ -133,7 +142,7 @@ library(ggplot2)
 library(dplyr)
 
 
-summary_data <- datos_sunscreen %>%
+summary_data <- data %>%
   group_by(Concentration_percent, Time_hr) %>%
   summarise(
     mean_mortality = mean(MortalityRate),
@@ -352,14 +361,14 @@ ggplot() +
     color = "Exposure time",
     shape = "Exposure time"
   ) +
-  theme_classic(base_family = "serif", base_size = 16) +
+  theme_classic(base_family = "sans", base_size = 16) +
   theme(
-    plot.title = element_text(hjust = 0.5, face = "bold", size = 18),
-    axis.title = element_text(face = "bold", size = 16),
+    plot.title = element_text(hjust = 0.5, size = 18),
+    axis.title = element_text(size = 16),
     axis.text = element_text(size = 14),
     legend.position = "top",
-    legend.title = element_text(face = "bold", size = 14),
-    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 14),
     panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
     panel.grid = element_blank()
   )
